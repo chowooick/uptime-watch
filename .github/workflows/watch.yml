@@ -1,0 +1,59 @@
+# Watches the watcher: Uptime Kuma (uptime.mnori.com) runs on one box in Korea
+# and goes blind with it. Every 5 minutes this checks that Kuma answers; the
+# first failed check after a good one fails the run, and GitHub mails the owner.
+# Later failed checks pass quietly until Kuma is back, so one outage = one mail.
+name: watch
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/cache/restore@v4
+        with:
+          path: state
+          key: state-${{ github.run_id }}
+          restore-keys: state-
+      - name: Check Uptime Kuma
+        id: check
+        run: |
+          prev=$(cat state 2>/dev/null || echo up)
+          now=down
+          for i in 1 2 3; do
+            code=$(curl -s -o /dev/null -m 15 -w '%{http_code}' https://uptime.mnori.com/ || true)
+            echo "try $i: HTTP $code"
+            case "$code" in 2*|3*) now=up; break ;; esac
+            sleep 20
+          done
+          echo "$now" > state
+          echo "previous=$prev now=$now"
+          echo "prev=$prev" >> "$GITHUB_OUTPUT"
+          echo "now=$now" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/save@v4
+        with:
+          path: state
+          key: state-${{ github.run_id }}
+      - name: Alert on a new outage
+        if: steps.check.outputs.now == 'down' && steps.check.outputs.prev == 'up'
+        run: |
+          echo "::error::uptime.mnori.com (Uptime Kuma on misa) is not answering. The monitor that watches nj1/nj2 is blind."
+          exit 1
+  keepalive:
+    # GitHub turns scheduled workflows off after 60 days without a commit.
+    runs-on: ubuntu-latest
+    if: github.event.schedule == '*/5 * * * *'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Monthly commit
+        run: |
+          month=$(date -u +%Y-%m)
+          [ "$(cat last-alive 2>/dev/null)" = "$month" ] && exit 0
+          echo "$month" > last-alive
+          git config user.name "uptime-watch"
+          git config user.email "uptime-watch@users.noreply.github.com"
+          git add last-alive && git commit -m "keepalive $month" && git push
