@@ -7,6 +7,10 @@ on:
   schedule:
     - cron: "*/5 * * * *"
   workflow_dispatch:
+    inputs:
+      url:
+        description: URL to check (for testing the alert)
+        default: https://uptime.mnori.com/
 permissions:
   contents: write
 jobs:
@@ -21,11 +25,14 @@ jobs:
           restore-keys: state-
       - name: Check Uptime Kuma
         id: check
+        env:
+          URL: ${{ inputs.url }}
         run: |
           prev=$(cat state 2>/dev/null || echo up)
           now=down
+          url="${URL:-https://uptime.mnori.com/}"
           for i in 1 2 3; do
-            code=$(curl -s -o /dev/null -m 15 -w '%{http_code}' https://uptime.mnori.com/ || true)
+            code=$(curl -s -o /dev/null -m 15 -w '%{http_code}' "$url" || true)
             echo "try $i: HTTP $code"
             case "$code" in 2*|3*) now=up; break ;; esac
             sleep 20
